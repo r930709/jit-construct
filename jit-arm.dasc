@@ -1,6 +1,6 @@
 #include <stdint.h>
 #include "util.h"
-
+#include <time.h>
 |.arch arm
 |.actionlist actions
 |
@@ -12,16 +12,77 @@
 #define Dst &state
 #define MAX_NESTING 256
 
+
+
+static double diff_in_second(struct timespec t1, struct timespec t2)
+ {
+      struct timespec diff;
+      if (t2.tv_nsec-t1.tv_nsec < 0) {
+          diff.tv_sec  = t2.tv_sec - t1.tv_sec - 1;
+          diff.tv_nsec = t2.tv_nsec - t1.tv_nsec + 1000000000;
+      } else {
+          diff.tv_sec  = t2.tv_sec - t1.tv_sec;
+          diff.tv_nsec = t2.tv_nsec - t1.tv_nsec;
+      }
+      return (diff.tv_sec + diff.tv_nsec / 1000000000.0);
+ }
+ 
+ int find_pattern1(char *p){
+         char *t = p;
+         int count_right = 0,count_left = 0;
+         if(*(t+1) == '-'){
+                 t++;
+                 while(*(t+1) == '>'){
+                         count_right++;
+                         t++;
+                 }if(*(t+1)=='+'){
+                         t++;
+                         while(*(t+1) == '<'){
+                                 count_left++;
+                                 t++;
+                         }
+                         if(count_right == count_left && *(t+1)==']'){
+                                 return(count_right);
+                         }                                                                            
+                 }
+         }
+         return(0);
+}
+int find_pattern2(char *p){
+         char *t = p;
+         int count_right = 0,count_left = 0;
+         if(*(t+1) == '-'){ 
+                 t++;            
+                 while(*(t+1) == '<'){
+                         count_left++;
+                         t++;
+                 }if(*(t+1)=='+'){
+                         t++;
+                         while(*(t+1) == '>'){
+                                 count_right++;
+                                 t++;
+                         }
+                         if(count_right == count_left && *(t+1)==']'){
+                                 return(count_right);
+                         }
+                 }
+         }
+         return(0);
+} 
 int main(int argc, char *argv[])
 {
 	if (argc < 2) err("Usage: jit-arm <inputfile>");
 	dasm_State *state;
 	initjit(&state, actions);
 
+	int value,count_pattern1=0,count_pattern2=0;
+	struct timespec start, end;
+	double cpu_time;
 	unsigned int maxpc = 0;
 	int pcstack[MAX_NESTING];
 	int *top = pcstack, *limit = pcstack + MAX_NESTING;
 
+	clock_gettime(CLOCK_REALTIME, &start);
 	// Function prologue.
 	|  push {PTR, r5, r7, lr}
 	|  mov  PTR, r0
@@ -29,20 +90,44 @@ int main(int argc, char *argv[])
 	for (char *p = read_file(argv[1]); *p; p++) {
 		switch (*p) {
 		case '>':
-			|  add  PTR, PTR, #1
+			value = 1;
+                        while(*(p+1) == '>'){
+                                value ++; 
+                                p++;
+                        }                                                                                
+                        |  add  PTR, PTR, #value
+
 			break;
 		case '<':
-			|  sub  PTR, PTR, #1
+			value = 1;
+                        while(*(p+1) == '<'){
+                                value ++;
+                                p++;
+                        }
+                        |  sub  PTR, PTR, #value
+
 			break;
 		case '+':
-			|  ldrb  r5, [PTR]
-			|  add   r5, r5, #1
-			|  strb  r5, [PTR]
+			value = 1;
+                        while(*(p+1) == '+'){
+                                value ++;
+                                p++;
+                        }                       
+                        |  ldrb  r5, [PTR]
+                        |  add   r5, r5, #value
+                        |  strb  r5, [PTR]
+
 			break;
 		case '-':
-			|  ldrb  r5, [PTR]
-			|  sub   r5, r5, #1
-			|  strb  r5, [PTR]
+			value = 1;
+                        while(*(p+1) == '-'){
+                                value ++;
+                                p++;
+                        }                       
+                        |  ldrb  r5, [PTR]
+                        |  sub   r5, r5, #value
+                        |  strb  r5, [PTR]
+
 			break;
 		case '.':
 			|  mov r0, #1   // stdout
@@ -63,6 +148,44 @@ int main(int argc, char *argv[])
 			// Each loop gets two pclabels: at the beginning and end.
 			// We store pclabel offsets in a stack to link the loop
 			// begin and end together.
+			/*----------case [-]------------------*/
+                        
+                        if( *(p+1)=='-' && *(p+2)==']'){
+                                p+=2;                           
+                                |  ldrb r5,[PTR]
+                                |  mov r5, #0
+                                |  strb r5,[PTR]
+                                break;
+                        }                                
+                        /*------------------------------------*/
+                        /*----------case [->>+<<]-------------*/			
+			if((value = find_pattern1(p))!=0){
+                                p+=(value*2)+3; 
+                                |  ldrb r5,[PTR]
+                                |  ldrb r6,[PTR, #value ]
+                                |  add r5, r5, r6
+                                |  strb  r5, [PTR, #value ]
+                                |  mov r5, #0   
+                                |  strb r5,[PTR]
+                                count_pattern1++;
+                                break;
+                        }
+                        /*------------------------------------*/
+                        /*----------case [-<<+>>]-------------*/         
+                        if((value = find_pattern2(p))!=0){
+                                p+=(value*2)+3; 
+                                |  sub PTR, PTR, #value
+                                |  ldrb r5,[PTR]
+                                |  ldrb r6,[PTR, #value ]
+                                |  add r5, r5, r6
+                                |  strb  r5, [PTR]
+                                |  mov r5, #0   
+                                |  strb r5,[PTR, #value ]
+                                |  add PTR, PTR, #value
+                                count_pattern2++;
+                                break;
+                        }
+			/*----------------------------------------*/
 			maxpc += 2;     // add two labels
 			*top++ = maxpc;
 			dasm_growpc(&state, maxpc);
@@ -90,5 +213,9 @@ int main(int argc, char *argv[])
 	fptr(mem);
 	free(mem);
 	free_jitcode(fptr);
+	clock_gettime(CLOCK_REALTIME, &end);
+        cpu_time = diff_in_second(start, end);  
+        printf("execution time : %lf sec\n", cpu_time);
+        printf("count_pattern1  = %d : count pattern2 = %d\n",count_pattern1,count_pattern2);
 	return 0;
 }

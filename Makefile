@@ -57,7 +57,7 @@ jit-arm: dynasm-driver.c jit-arm.h
 jit-arm.h: jit-arm.dasc
 	$(LUA) dynasm/dynasm.lua -o $@ jit-arm.dasc
 run-jit-arm: jit-arm
-	$(QEMU_ARM) jit-arm progs/hello.b && \
+	$(QEMU_ARM) jit-arm progs/hanoi.b && \
 	$(CROSS_COMPILE)objdump -D -b binary -marm /tmp/jitcode
 
 bench-jit-x64: jit-x64
